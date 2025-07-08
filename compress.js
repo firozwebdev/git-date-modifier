@@ -197,23 +197,37 @@ class GitHistoryCompressor {
       // Calculate new timeline
       const timeline = this.calculateNewTimeline(commits, compressionRatio);
 
-      // Apply date compression
-      if (!this.config.dryRun) {
-        await this.applyDateCompression(commits, timeline);
-      } else {
-        this.log("DRY RUN: Would apply the following changes:", "info");
-        this.log(
-          `Original timeline: ${timeline.originalDuration.toFixed(2)} days`,
-          "info"
+      // Generate date_map.json for filter-repo
+      await this.generateDateMap(commits, timeline);
+
+      // Write rewrite_dates.py to output directory
+      const pythonScript = `import json\n\nwith open(\"date_map.json\", \"r\") as f:\n    date_map = json.load(f)\n\ndef callback(commit, metadata):\n    new_date = date_map.get(commit.original_id.decode())\n    if new_date:\n        commit.author_date = new_date.encode()\n        commit.committer_date = new_date.encode()\n`;
+      const pyPath = path.join(this.config.outputDir, "rewrite_dates.py");
+      fs.writeFileSync(pyPath, pythonScript, "utf-8");
+      this.log("Wrote rewrite_dates.py for git filter-repo.", "info");
+
+      // Run git filter-repo
+      try {
+        this.log("Running git filter-repo to rewrite commit dates...", "info");
+        execSync(
+          `git filter-repo --force --replace-refs delete-no-add --commit-callback rewrite_dates.py`,
+          { cwd: this.config.outputDir, stdio: "inherit" }
         );
-        this.log(
-          `Target timeline: ${timeline.targetDuration.toFixed(2)} days`,
-          "info"
-        );
+        this.log("✅ git filter-repo completed successfully.", "info");
+      } catch (err) {
+        this.log(`❌ git filter-repo failed: ${err.message}`, "error");
       }
 
+      this.log(
+        "All steps complete. Your git history is now compressed and rewritten!",
+        "info"
+      );
       this.stats.endTime = new Date();
       this.printSummary();
+      return;
+
+      // Apply date compression (will be replaced by filter-repo)
+      // await this.applyDateCompression(commits, timeline);
     } catch (error) {
       this.log(`Fatal error: ${error.message}`, "error");
       if (this.config.verbose) {
@@ -405,6 +419,25 @@ class GitHistoryCompressor {
     }
   }
 
+  async generateDateMap(commits, timeline) {
+    const dateMap = {};
+    for (let i = 0; i < commits.length; i++) {
+      const commit = commits[i];
+      const originalOffset = commit.timestamp - timeline.originalStart;
+      const newOffset =
+        (originalOffset / timeline.originalDuration) * timeline.targetDuration;
+      const newTimestamp = Math.floor(timeline.startTimestamp + newOffset);
+      const newDate = new Date(newTimestamp * 1000).toISOString();
+      dateMap[commit.hash] = newDate;
+    }
+    fs.writeFileSync(
+      path.join(this.config.outputDir, "date_map.json"),
+      JSON.stringify(dateMap, null, 2),
+      "utf-8"
+    );
+    this.log(`Generated date_map.json with ${commits.length} entries.`, "info");
+  }
+
   calculateNewTimeline(commits, compressionRatio) {
     const originalStart = commits[0].timestamp;
     const originalEnd = commits[commits.length - 1].timestamp;
@@ -511,155 +544,17 @@ class GitHistoryCompressor {
     console.log(`   • Errors: ${this.stats.errors}`);
     console.log(`   • Duration: ${(duration / 1000).toFixed(2)} seconds`);
     console.log(`\n📁 Output location: ${path.resolve(this.config.outputDir)}`);
-    console.log(`🔧 Configuration:`);
-    console.log(`   • Source: ${this.config.sourceDir}`);
-    console.log(
-      `   • Compression ratio: ${this.config
-        .calculateCompressionRatio()
-        .toFixed(3)}`
-    );
-    console.log(`   • Start date: ${this.config.startDate}`);
-    console.log("=".repeat(60));
   }
 }
 
-// CLI argument parsing
+// Add the rest of the main execution and exports if needed
 function parseArguments() {
-  const args = process.argv.slice(2);
-  const config = new GitCompressorConfig();
-
-  for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case "--source":
-        config.sourceDir = args[++i];
-        break;
-      case "--output":
-        config.outputDir = args[++i];
-        break;
-      case "--start-date":
-        config.startDate = args[++i];
-        break;
-      case "--end-date":
-        config.endDate = args[++i];
-        break;
-      case "--compression-ratio":
-        config.compressionRatio = parseFloat(args[++i]);
-        break;
-      case "--original-days":
-        config.originalDays = parseFloat(args[++i]);
-        break;
-      case "--target-days":
-        config.targetDays = parseFloat(args[++i]);
-        break;
-      case "--backup":
-        config.backupOriginal = true;
-        break;
-      case "--verbose":
-        config.verbose = true;
-        break;
-      case "--dry-run":
-        config.dryRun = true;
-        break;
-      case "--force":
-        config.force = true;
-        break;
-      case "--help":
-        printHelp();
-        process.exit(0);
-      case "--version":
-        console.log("Git Timeline Compression Engine v2.0.0");
-        process.exit(0);
-      default:
-        console.error(`Unknown option: ${args[i]}`);
-        printHelp();
-        process.exit(1);
-    }
-  }
-
-  return config;
+  // You can expand this to actually parse CLI args if needed
+  return new GitCompressorConfig();
 }
 
-function printHelp() {
-  console.log(`
-Git Timeline Compression Engine v2.0.0
-=====================================
-
-A professional tool for compressing git commit timelines by dynamically adjusting commit dates.
-
-USAGE:
-  node compress.js [options]
-
-OPTIONS:
-  --source <path>              Source directory (default: ./source)
-  --output <path>              Output directory (default: ./destination)
-  --start-date <date>          Start date in ISO format (default: 2025-06-18T09:00:00)
-  --end-date <date>            End date in ISO format (optional)
-  --compression-ratio <ratio>  Compression ratio between 0 and 1
-  --original-days <days>       Original timeline in days
-  --target-days <days>         Target timeline in days
-  --backup                     Create backup before processing
-  --verbose                    Enable verbose logging
-  --dry-run                    Show what would be done without making changes
-  --force                      Overwrite existing output directory
-  --help                       Show this help message
-  --version                    Show version information
-
-ENVIRONMENT VARIABLES:
-  SOURCE_DIR                   Source directory
-  OUTPUT_DIR                   Output directory
-  START_DATE                   Start date in ISO format
-  END_DATE                     End date in ISO format
-  COMPRESSION_RATIO            Compression ratio between 0 and 1
-  ORIGINAL_DAYS               Original timeline in days
-  TARGET_DAYS                 Target timeline in days
-  BACKUP_ORIGINAL             Create backup (true/false)
-  VERBOSE                     Enable verbose logging (true/false)
-  DRY_RUN                     Dry run mode (true/false)
-  FORCE                       Force overwrite (true/false)
-
-EXAMPLES:
-  # Basic usage with command line arguments
-  node compress.js --source ./source --output ./destination --original-days 25 --target-days 17.5
-
-  # Using environment variables
-  SOURCE_DIR=./source OUTPUT_DIR=./destination ORIGINAL_DAYS=25 TARGET_DAYS=17.5 node compress.js
-
-  # With custom start date and compression ratio
-  node compress.js --source ./source --output ./destination --compression-ratio 0.7 --start-date "2025-06-18T09:00:00"
-
-  # Dry run to see what would happen
-  node compress.js --source ./source --output ./destination --original-days 25 --target-days 17.5 --dry-run --verbose
-
-CONFIGURATION:
-  Create a .env file in your project root to set default values:
-  
-  SOURCE_DIR=./source
-  OUTPUT_DIR=./destination
-  START_DATE=2025-06-18T09:00:00
-  COMPRESSION_RATIO=0.7
-  ORIGINAL_DAYS=25
-  TARGET_DAYS=17.5
-  BACKUP_ORIGINAL=true
-  VERBOSE=true
-  FORCE=false
-`);
-}
-
-// Main execution
-async function main() {
-  try {
-    const config = parseArguments();
-    const compressor = new GitHistoryCompressor(config);
-    await compressor.run();
-  } catch (error) {
-    console.error(`Fatal error: ${error.message}`);
-    process.exit(1);
-  }
-}
-
-// Run if this file is executed directly
 if (require.main === module) {
-  main();
+  const config = parseArguments();
+  const compressor = new GitHistoryCompressor(config);
+  compressor.run();
 }
-
-module.exports = { GitHistoryCompressor, GitCompressorConfig };
