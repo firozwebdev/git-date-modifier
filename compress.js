@@ -165,16 +165,6 @@ class GitHistoryCompressor {
         throw new Error(`Configuration errors:\n${errors.join("\n")}`);
       }
 
-      // Calculate compression ratio
-      const compressionRatio = this.config.calculateCompressionRatio();
-      if (!compressionRatio) {
-        throw new Error(
-          "Unable to calculate compression ratio. Please provide COMPRESSION_RATIO, ORIGINAL_DAYS and TARGET_DAYS, or ORIGINAL_DAYS and END_DATE."
-        );
-      }
-
-      this.log(`Compression ratio: ${compressionRatio.toFixed(3)}`, "info");
-
       // Copy source files (this will handle destination directory checks)
       await this.copySourceFiles();
 
@@ -194,14 +184,23 @@ class GitHistoryCompressor {
         return;
       }
 
-      // Calculate new timeline
-      const timeline = this.calculateNewTimeline(commits, compressionRatio);
+      // Calculate new timeline using actual commit history and user-specified start/end dates
+      this.log(
+        `DEBUG: Using startDate=${this.config.startDate}, endDate=${this.config.endDate}`,
+        "debug"
+      );
+      const timeline = this.calculateNewTimeline(
+        commits,
+        this.config.startDate,
+        this.config.endDate
+      );
+      this.lastTimeline = timeline;
 
       // Generate date_map.json for filter-repo
       await this.generateDateMap(commits, timeline);
 
       // Write rewrite_dates.py to output directory
-      const pythonScript = `import json\n\nwith open(\"date_map.json\", \"r\") as f:\n    date_map = json.load(f)\n\ndef callback(commit, metadata):\n    new_date = date_map.get(commit.original_id.decode())\n    if new_date:\n        commit.author_date = new_date.encode()\n        commit.committer_date = new_date.encode()\n`;
+      const pythonScript = `import json\n\nwith open(\"date_map.json\", \"r\") as f:\n    date_map = json.load(f)\n\ndef commit_callback(commit, metadata):\n    new_date = date_map.get(commit.original_id.decode())\n    if new_date:\n        commit.author_date = new_date.encode()\n        commit.committer_date = new_date.encode()\n`;
       const pyPath = path.join(this.config.outputDir, "rewrite_dates.py");
       fs.writeFileSync(pyPath, pythonScript, "utf-8");
       this.log("Wrote rewrite_dates.py for git filter-repo.", "info");
@@ -438,14 +437,17 @@ class GitHistoryCompressor {
     this.log(`Generated date_map.json with ${commits.length} entries.`, "info");
   }
 
-  calculateNewTimeline(commits, compressionRatio) {
+  calculateNewTimeline(commits, startDate, endDate) {
     const originalStart = commits[0].timestamp;
     const originalEnd = commits[commits.length - 1].timestamp;
     const originalDuration = originalEnd - originalStart;
-    const targetDuration = originalDuration * compressionRatio;
 
-    const startTimestamp = new Date(this.config.startDate).getTime() / 1000;
-    const endTimestamp = startTimestamp + targetDuration;
+    const startTimestamp = new Date(startDate).getTime() / 1000;
+    const endTimestamp = endDate
+      ? new Date(endDate).getTime() / 1000
+      : startTimestamp + originalDuration;
+
+    const targetDuration = endTimestamp - startTimestamp;
 
     return {
       originalStart,
@@ -454,7 +456,7 @@ class GitHistoryCompressor {
       targetDuration,
       startTimestamp,
       endTimestamp,
-      compressionRatio,
+      compressionRatio: targetDuration / originalDuration,
     };
   }
 
@@ -543,6 +545,13 @@ class GitHistoryCompressor {
     console.log(`   • Processed commits: ${this.stats.processedCommits}`);
     console.log(`   • Errors: ${this.stats.errors}`);
     console.log(`   • Duration: ${(duration / 1000).toFixed(2)} seconds`);
+    if (this.lastTimeline) {
+      console.log(
+        `   • Compression ratio: ${this.lastTimeline.compressionRatio.toFixed(
+          3
+        )}`
+      );
+    }
     console.log(`\n📁 Output location: ${path.resolve(this.config.outputDir)}`);
   }
 }
