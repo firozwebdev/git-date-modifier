@@ -1,0 +1,25 @@
+{
+  "actions": [
+    {
+      "type": "merge",
+      "branch": "mainWorking",
+      "preMergeHead": "89dac49bb5cddba7a55571fceb852277918568fe"
+    },
+    {
+      "type": "merge",
+      "branch": "mainWorking",
+      "preMergeHead": "89dac49bb5cddba7a55571fceb852277918568fe"
+    },
+    {
+      "type": "merge",
+      "branch": "mainWorking",
+      "preMergeHead": "89dac49bb5cddba7a55571fceb852277918568fe"
+    },
+    {
+      "type": "merge",
+      "branch": "mainWorking",
+      "preMergeHead": "6895cf57cc5dafbdd800f040eef9238ff6f096c3"
+    }
+  ],
+  "undone": []
+}
